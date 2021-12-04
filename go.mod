@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/alecthomas/kong v0.2.17
+	github.com/apache/arrow/go/arrow v0.0.0-20191024131854-af6fa24be0db
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
@@ -13,6 +14,7 @@ require (
 	github.com/gin-gonic/gin v1.7.0 // indirect
 	github.com/go-chi/cors v1.2.0
 	github.com/go-delve/delve v1.7.2
+	github.com/go-kit/kit v0.11.0
 	github.com/go-kit/log v0.1.0
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
 	github.com/goburrow/cache v0.1.4
