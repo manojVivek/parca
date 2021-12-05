@@ -12,12 +12,20 @@ import (
 )
 
 const (
-	tenantCol = iota
-	labelSetIDCol
-	stackTraceIDCol
-	timeStampCol
+	//tenantCol = iota
+	//labelSetIDCol
+	stackTraceIDCol = iota
+	//timeStampCol
 	valueCol
 )
+
+var schemaFields = []arrow.Field{
+	//{Name: "tenant", Type: arrow.BinaryTypes.String},
+	//{Name: "labelsetID", Type: arrow.PrimitiveTypes.Uint64},
+	{Name: "stackTraceID", Type: arrow.BinaryTypes.String},
+	//{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
+	{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+}
 
 // DB is an in memory arrow db for profile data
 type DB struct {
@@ -33,16 +41,7 @@ type DB struct {
 func NewArrowDB() *DB {
 	return &DB{
 		GoAllocator: memory.NewGoAllocator(),
-		Schema: arrow.NewSchema(
-			[]arrow.Field{
-				{Name: "tenant", Type: arrow.BinaryTypes.String},
-				{Name: "labelsetID", Type: arrow.PrimitiveTypes.Uint64},
-				{Name: "stackTraceID", Type: arrow.BinaryTypes.String},
-				{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
-				{Name: "value", Type: arrow.PrimitiveTypes.Int64},
-			},
-			nil, // no metadata (TODO)
-		),
+		Schema:      arrow.NewSchema(schemaFields, nil), // no metadata (TODO)
 	}
 }
 
@@ -83,20 +82,28 @@ func (a *appender) Append(ctx context.Context, p *storage.Profile) error {
 
 // AppendFlat implements the Appender interface
 func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error {
-	tenant := "tenant-placeholder"
+	//tenant := "tenant-placeholder"
 
 	// Create a record builder for the profile
-	b := array.NewRecordBuilder(a.db, a.db.Schema)
+	md := arrow.MetadataFrom(map[string]string{
+		"PeriodType": fmt.Sprintf("%v", p.Meta.PeriodType),
+		"SampleType": fmt.Sprintf("%v", p.Meta.SampleType),
+		"Timestamp":  fmt.Sprintf("%v", p.Meta.Timestamp),
+		"Duration":   fmt.Sprintf("%v", p.Meta.Duration),
+		"Period":     fmt.Sprintf("%v", p.Meta.Period),
+		"LabelsetID": fmt.Sprintf("%v", a.lsetID),
+	})
+	b := array.NewRecordBuilder(a.db, arrow.NewSchema(schemaFields, &md))
 	defer b.Release()
 
 	// Iterate over all samples adding them to the record
 	for id, s := range p.Samples() {
 
 		// Append tenant
-		b.Field(tenantCol).(*array.StringBuilder).Append(tenant)
-		b.Field(labelSetIDCol).(*array.Uint64Builder).Append(a.lsetID)
+		//b.Field(tenantCol).(*array.StringBuilder).Append(tenant)
+		//b.Field(labelSetIDCol).(*array.Uint64Builder).Append(a.lsetID)
 		b.Field(stackTraceIDCol).(*array.StringBuilder).Append(id)
-		b.Field(timeStampCol).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
+		//b.Field(timeStampCol).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
 		b.Field(valueCol).(*array.Int64Builder).Append(s.Value)
 	}
 
