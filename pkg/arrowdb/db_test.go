@@ -2,8 +2,8 @@ package arrowdb
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
+	"math"
 	"testing"
 
 	"github.com/go-kit/kit/log"
@@ -20,20 +20,16 @@ import (
 func TestAppendProfile(t *testing.T) {
 	ctx := context.Background()
 	logger := log.NewNopLogger()
+	registry := prometheus.NewRegistry()
 	tracer := trace.NewNoopTracerProvider().Tracer("")
-
-	ms := metastore.NewBadgerMetastore(
-		logger,
-		prometheus.NewRegistry(),
-		tracer,
-		metastore.NewRandomUUIDGenerator(),
-	)
 
 	b, err := ioutil.ReadFile("../storage/testdata/profile1.pb.gz")
 	require.NoError(t, err)
 
 	p, err := profile.Parse(bytes.NewBuffer(b))
 	require.NoError(t, err)
+
+	ms := metastore.NewBadgerMetastore(logger, registry, tracer, metastore.NewRandomUUIDGenerator())
 
 	fp, err := storage.FlatProfileFromPprof(ctx, logger, ms, p, 0)
 	require.NoError(t, err)
@@ -47,9 +43,11 @@ func TestAppendProfile(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		appender.AppendFlat(ctx, fp)
+		err := appender.AppendFlat(ctx, fp)
+		require.NoError(t, err)
 	}
 
-	// Printout database
-	fmt.Println(db)
+	q := db.Querier(context.Background(), math.MinInt64, math.MaxInt64, false)
+	_ = q.Select(nil, nil) // select all - for now
+
 }

@@ -113,3 +113,49 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 
 	return nil
 }
+
+func (db *DB) Querier(ctx context.Context, mint, maxt int64, _ bool) storage.Querier {
+	return &querier{
+		ctx:  ctx,
+		db:   db,
+		mint: mint,
+		maxt: maxt,
+	}
+}
+
+type querier struct {
+	ctx  context.Context
+	db   *DB
+	mint int64
+	maxt int64
+}
+
+func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, storage.Warnings, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, storage.Warnings, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) storage.SeriesSet {
+	itr, err := array.NewRecordReader(q.db.Schema, q.db.recordList)
+	if err != nil {
+		return &storage.SliceSeriesSet{}
+	}
+	defer itr.Release()
+
+	n := 0
+	for itr.Next() {
+		rec := itr.Record()
+		for i, col := range rec.Columns() {
+			// Now we actually need to somehow access the data
+			fmt.Printf("ref[%d][%q]: %v\n", n, rec.ColumnName(i), col)
+		}
+		n++
+	}
+
+	return nil
+}
