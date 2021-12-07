@@ -103,8 +103,6 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 
 	// Iterate over all samples adding them to the record
 	for id, s := range p.Samples() {
-
-		// Append tenant
 		//b.Field(tenantCol).(*array.StringBuilder).Append(tenant)
 		//b.Field(labelSetIDCol).(*array.Uint64Builder).Append(a.lsetID)
 		b.Field(stackTraceIDCol).(*array.StringBuilder).Append(id)
@@ -162,14 +160,22 @@ func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) stor
 	tr := array.NewTableReader(tbl, -1)
 	defer tr.Release()
 
-	n := 0
+	samples := map[string]*storage.Sample{}
 	for tr.Next() {
 		rec := tr.Record()
-		for i, col := range rec.Columns() {
-			// Now we actually need to somehow access the data
-			fmt.Printf("ref[%d][%q]: %v\n", n, rec.ColumnName(i), col)
-			n++
+
+		s := array.NewStringData(rec.Column(0).Data())
+		d := array.NewInt64Data(rec.Column(1).Data())
+		for i := 0; i < rec.Column(0).Len(); i++ {
+			samples[s.Value(i)] = &storage.Sample{
+				Value: d.Value(i),
+			}
 		}
+	}
+
+	// printout partially reconstructed samples
+	for k, v := range samples {
+		fmt.Printf("%v: %v\n", k, v.Value)
 	}
 
 	return nil
