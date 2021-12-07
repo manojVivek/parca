@@ -156,20 +156,20 @@ func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, storage.Warnings,
 }
 
 func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) storage.SeriesSet {
-	itr, err := array.NewRecordReader(q.db.Schema, q.db.recordList[q.minIdx:q.maxIdx])
-	if err != nil {
-		return &storage.SliceSeriesSet{}
-	}
-	defer itr.Release()
+	tbl := array.NewTableFromRecords(q.db.Schema, q.db.recordList[q.minIdx:q.maxIdx])
+	defer tbl.Release()
+
+	tr := array.NewTableReader(tbl, -1)
+	defer tr.Release()
 
 	n := 0
-	for itr.Next() {
-		rec := itr.Record()
+	for tr.Next() {
+		rec := tr.Record()
 		for i, col := range rec.Columns() {
 			// Now we actually need to somehow access the data
 			fmt.Printf("ref[%d][%q]: %v\n", n, rec.ColumnName(i), col)
+			n++
 		}
-		n++
 	}
 
 	return nil
