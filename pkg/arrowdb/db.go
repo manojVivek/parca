@@ -3,6 +3,7 @@ package arrowdb
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
@@ -17,6 +18,10 @@ const (
 	stackTraceIDCol = iota
 	//timeStampCol
 	valueCol
+)
+
+const (
+	timestampMeta = "ts"
 )
 
 var schemaFields = []arrow.Field{
@@ -86,12 +91,12 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 
 	// Create a record builder for the profile
 	md := arrow.MetadataFrom(map[string]string{
-		"PeriodType": fmt.Sprintf("%v", p.Meta.PeriodType),
-		"SampleType": fmt.Sprintf("%v", p.Meta.SampleType),
-		"Timestamp":  fmt.Sprintf("%v", p.Meta.Timestamp),
-		"Duration":   fmt.Sprintf("%v", p.Meta.Duration),
-		"Period":     fmt.Sprintf("%v", p.Meta.Period),
-		"LabelsetID": fmt.Sprintf("%v", a.lsetID),
+		"PeriodType":  fmt.Sprintf("%v", p.Meta.PeriodType),
+		"SampleType":  fmt.Sprintf("%v", p.Meta.SampleType),
+		timestampMeta: fmt.Sprintf("%v", p.Meta.Timestamp),
+		"Duration":    fmt.Sprintf("%v", p.Meta.Duration),
+		"Period":      fmt.Sprintf("%v", p.Meta.Period),
+		"LabelsetID":  fmt.Sprintf("%v", a.lsetID),
 	})
 	b := array.NewRecordBuilder(a.db, arrow.NewSchema(schemaFields, &md))
 	defer b.Release()
@@ -115,19 +120,29 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 }
 
 func (db *DB) Querier(ctx context.Context, mint, maxt int64, _ bool) storage.Querier {
+	mints, maxts := fmt.Sprintf("%v", mint), fmt.Sprintf("%v", maxt)
+	min := sort.Search(len(db.recordList), func(i int) bool {
+		ts := db.recordList[i].Schema().Metadata().Values()[db.recordList[i].Schema().Metadata().FindKey(timestampMeta)]
+		return ts >= mints
+	})
+	max := sort.Search(len(db.recordList), func(i int) bool {
+		ts := db.recordList[i].Schema().Metadata().Values()[db.recordList[i].Schema().Metadata().FindKey(timestampMeta)]
+		return ts >= maxts
+	})
+
 	return &querier{
-		ctx:  ctx,
-		db:   db,
-		mint: mint,
-		maxt: maxt,
+		ctx:    ctx,
+		db:     db,
+		minIdx: min,
+		maxIdx: max,
 	}
 }
 
 type querier struct {
-	ctx  context.Context
-	db   *DB
-	mint int64
-	maxt int64
+	ctx    context.Context
+	db     *DB
+	minIdx int
+	maxIdx int
 }
 
 func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, storage.Warnings, error) {
@@ -141,7 +156,7 @@ func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, storage.Warnings,
 }
 
 func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) storage.SeriesSet {
-	itr, err := array.NewRecordReader(q.db.Schema, q.db.recordList)
+	itr, err := array.NewRecordReader(q.db.Schema, q.db.recordList[q.minIdx:q.maxIdx])
 	if err != nil {
 		return &storage.SliceSeriesSet{}
 	}
