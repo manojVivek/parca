@@ -48,6 +48,9 @@ func TestAppendProfile(t *testing.T) {
 	}
 
 	q := db.Querier(context.Background(), math.MinInt64, math.MaxInt64, false)
-	_ = q.Select(nil, nil) // select all - for now
-
+	_ = q.Select(nil, &labels.Matcher{
+		Type:  labels.MatchEqual,
+		Name:  "__name__",
+		Value: "allocs",
+	}) // select all - for now
 }

@@ -3,12 +3,16 @@ package arrowdb
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
 	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/dgraph-io/sroar"
 	"github.com/parca-dev/parca/pkg/storage"
+	"github.com/parca-dev/parca/pkg/storage/index"
 	"github.com/prometheus/prometheus/pkg/labels"
 )
 
@@ -22,6 +26,7 @@ const (
 
 const (
 	timestampMeta = "ts"
+	labelsetMeta  = "ls"
 )
 
 var schemaFields = []arrow.Field{
@@ -40,6 +45,8 @@ type DB struct {
 	// recordList is the list of records present in the db
 	// canonically a record is a profile (TODO?)
 	recordList []array.Record
+
+	idx *LabelIndex
 }
 
 // NewArrowDB returns a new arrow db
@@ -47,6 +54,9 @@ func NewArrowDB() *DB {
 	return &DB{
 		GoAllocator: memory.NewGoAllocator(),
 		Schema:      arrow.NewSchema(schemaFields, nil), // no metadata (TODO)
+		idx: &LabelIndex{
+			postings: index.NewMemPostings(),
+		},
 	}
 }
 
@@ -70,6 +80,7 @@ func (db *DB) String() string {
 
 // Appender implements the storage.Appender interface
 func (db *DB) Appender(ctx context.Context, lset labels.Labels) (storage.Appender, error) {
+	db.idx.postings.Add(lset.Hash(), lset) // TODO probably not safe to perform here; as there's no guarantee that anything is ever appended
 	return &appender{
 		lsetID: lset.Hash(),
 		db:     db,
@@ -96,7 +107,7 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 		timestampMeta: fmt.Sprintf("%v", p.Meta.Timestamp),
 		"Duration":    fmt.Sprintf("%v", p.Meta.Duration),
 		"Period":      fmt.Sprintf("%v", p.Meta.Period),
-		"LabelsetID":  fmt.Sprintf("%v", a.lsetID),
+		labelsetMeta:  fmt.Sprintf("%v", a.lsetID),
 	})
 	b := array.NewRecordBuilder(a.db, arrow.NewSchema(schemaFields, &md))
 	defer b.Release()
@@ -153,8 +164,35 @@ func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, storage.Warnings,
 	panic("implement me")
 }
 
+// Select will obtain a set of postings from the label index based on the given label matchers.
+// Using those postings it will select a set of stack traces from records that match those postings
 func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) storage.SeriesSet {
-	tbl := array.NewTableFromRecords(q.db.Schema, q.db.recordList[q.minIdx:q.maxIdx])
+	bm, err := storage.PostingsForMatchers(q.db.idx, ms...)
+	if err != nil {
+		return nil
+	}
+
+	var list []array.Record
+	switch {
+	case bm.Contains(math.MaxUint64): // @matthias does this check even make sense?
+		list = q.db.recordList[q.minIdx:q.maxIdx]
+	default:
+		rl := q.db.recordList[q.minIdx:q.maxIdx]
+		list = []array.Record{}
+		for _, r := range rl {
+			s := r.Schema().Metadata().Values()[r.Schema().Metadata().FindKey(labelsetMeta)]
+			v, err := strconv.ParseUint(s, 10, 64)
+			if err != nil {
+				panic("busted!")
+			}
+
+			if bm.Contains(v) {
+				list = append(list, r)
+			}
+		}
+	}
+
+	tbl := array.NewTableFromRecords(q.db.Schema, list)
 	defer tbl.Release()
 
 	tr := array.NewTableReader(tbl, -1)
@@ -178,5 +216,10 @@ func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) stor
 		fmt.Printf("%v: %v\n", k, v.Value)
 	}
 
+	return nil
+}
+
+// traceIDFromMatchers finds the set of trace IDs that satisfy the label matchers
+func (q *querier) traceIDFromMatchers(ms ...*labels.Matcher) *sroar.Bitmap {
 	return nil
 }
