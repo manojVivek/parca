@@ -1,4 +1,4 @@
-package arrowdb
+package storage
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/google/pprof/profile"
-	"github.com/parca-dev/parca/pkg/storage"
 	"github.com/parca-dev/parca/pkg/storage/metastore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/pkg/labels"
@@ -23,7 +22,7 @@ func TestAppendProfile(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	tracer := trace.NewNoopTracerProvider().Tracer("")
 
-	b, err := ioutil.ReadFile("../storage/testdata/profile1.pb.gz")
+	b, err := ioutil.ReadFile("testdata/profile1.pb.gz")
 	require.NoError(t, err)
 
 	p, err := profile.Parse(bytes.NewBuffer(b))
@@ -31,7 +30,7 @@ func TestAppendProfile(t *testing.T) {
 
 	ms := metastore.NewBadgerMetastore(logger, registry, tracer, metastore.NewRandomUUIDGenerator())
 
-	fp, err := storage.FlatProfileFromPprof(ctx, logger, ms, p, 0)
+	fp, err := FlatProfileFromPprof(ctx, logger, ms, p, 0)
 	require.NoError(t, err)
 
 	db := NewArrowDB()

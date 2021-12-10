@@ -1,9 +1,8 @@
-package arrowdb
+package storage
 
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/apache/arrow/go/arrow/array"
 	"github.com/apache/arrow/go/arrow/memory"
 	"github.com/dgraph-io/sroar"
-	"github.com/parca-dev/parca/pkg/storage"
 	"github.com/parca-dev/parca/pkg/storage/index"
 	"github.com/prometheus/prometheus/pkg/labels"
 )
@@ -37,8 +35,8 @@ var schemaFields = []arrow.Field{
 	{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 }
 
-// DB is an in memory arrow db for profile data
-type DB struct {
+// ArrowDB is an in memory arrow db for profile data
+type ArrowDB struct {
 	*memory.GoAllocator
 	*arrow.Schema
 
@@ -50,8 +48,8 @@ type DB struct {
 }
 
 // NewArrowDB returns a new arrow db
-func NewArrowDB() *DB {
-	return &DB{
+func NewArrowDB() *ArrowDB {
+	return &ArrowDB{
 		GoAllocator: memory.NewGoAllocator(),
 		Schema:      arrow.NewSchema(schemaFields, nil), // no metadata (TODO)
 		idx: &LabelIndex{
@@ -60,7 +58,7 @@ func NewArrowDB() *DB {
 	}
 }
 
-func (db *DB) String() string {
+func (db *ArrowDB) String() string {
 	tbl := array.NewTableFromRecords(db.Schema, db.recordList)
 	defer tbl.Release()
 
@@ -79,8 +77,10 @@ func (db *DB) String() string {
 }
 
 // Appender implements the storage.Appender interface
-func (db *DB) Appender(ctx context.Context, lset labels.Labels) (storage.Appender, error) {
-	db.idx.postings.Add(lset.Hash(), lset) // TODO probably not safe to perform here; as there's no guarantee that anything is ever appended
+func (db *ArrowDB) Appender(ctx context.Context, lset labels.Labels) (Appender, error) {
+	// TODO probably not safe to perform here; as there's no guarantee that anything is ever appended
+	// TODO: We need to also store the lset itself to be able to return it in the ArrowSeries later
+	db.idx.postings.Add(lset.Hash(), lset)
 	return &appender{
 		lsetID: lset.Hash(),
 		db:     db,
@@ -89,15 +89,15 @@ func (db *DB) Appender(ctx context.Context, lset labels.Labels) (storage.Appende
 
 type appender struct {
 	lsetID uint64
-	db     *DB
+	db     *ArrowDB
 }
 
-func (a *appender) Append(ctx context.Context, p *storage.Profile) error {
+func (a *appender) Append(ctx context.Context, p *Profile) error {
 	panic("unimplemented")
 }
 
 // AppendFlat implements the Appender interface
-func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error {
+func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 	//tenant := "tenant-placeholder"
 
 	// Create a record builder for the profile
@@ -128,7 +128,7 @@ func (a *appender) AppendFlat(ctx context.Context, p *storage.FlatProfile) error
 	return nil
 }
 
-func (db *DB) Querier(ctx context.Context, mint, maxt int64, _ bool) storage.Querier {
+func (db *ArrowDB) Querier(ctx context.Context, mint, maxt int64, _ bool) Querier {
 	mints, maxts := fmt.Sprintf("%v", mint), fmt.Sprintf("%v", maxt)
 	min := sort.Search(len(db.recordList), func(i int) bool {
 		ts := db.recordList[i].Schema().Metadata().Values()[db.recordList[i].Schema().Metadata().FindKey(timestampMeta)]
@@ -149,77 +149,124 @@ func (db *DB) Querier(ctx context.Context, mint, maxt int64, _ bool) storage.Que
 
 type querier struct {
 	ctx    context.Context
-	db     *DB
+	db     *ArrowDB
 	minIdx int
 	maxIdx int
 }
 
-func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, storage.Warnings, error) {
+func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, Warnings, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, storage.Warnings, error) {
+func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, Warnings, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
 // Select will obtain a set of postings from the label index based on the given label matchers.
 // Using those postings it will select a set of stack traces from records that match those postings
-func (q *querier) Select(hints *storage.SelectHints, ms ...*labels.Matcher) storage.SeriesSet {
-	bm, err := storage.PostingsForMatchers(q.db.idx, ms...)
+func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
+	postings, err := PostingsForMatchers(q.db.idx, ms...)
 	if err != nil {
-		return nil
+		return &SliceSeriesSet{}
 	}
 
-	var list []array.Record
-	switch {
-	case bm.Contains(math.MaxUint64): // @matthias does this check even make sense?
-		list = q.db.recordList[q.minIdx:q.maxIdx]
-	default:
-		rl := q.db.recordList[q.minIdx:q.maxIdx]
-		list = []array.Record{}
-		for _, r := range rl {
-			s := r.Schema().Metadata().Values()[r.Schema().Metadata().FindKey(labelsetMeta)]
-			v, err := strconv.ParseUint(s, 10, 64)
-			if err != nil {
-				panic("busted!")
-			}
+	records := make(map[uint64][]array.Record, postings.GetCardinality())
 
-			if bm.Contains(v) {
-				list = append(list, r)
-			}
+	// TODO: This might not be the best runtime.
+	// Maybe arrow has another way to find records by labelset?
+	for _, r := range q.db.recordList[q.minIdx:q.maxIdx] {
+		s := r.Schema().Metadata().Values()[r.Schema().Metadata().FindKey(labelsetMeta)]
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return &SliceSeriesSet{}
+		}
+		if postings.Contains(v) {
+			records[v] = append(records[v], r)
 		}
 	}
 
-	tbl := array.NewTableFromRecords(q.db.Schema, list)
-	defer tbl.Release()
+	ss := make([]Series, 0, postings.GetCardinality())
 
-	tr := array.NewTableReader(tbl, -1)
-	defer tr.Release()
-
-	samples := map[string]*storage.Sample{}
-	for tr.Next() {
-		rec := tr.Record()
-
-		s := array.NewStringData(rec.Column(0).Data())
-		d := array.NewInt64Data(rec.Column(1).Data())
-		for i := 0; i < rec.Column(0).Len(); i++ {
-			samples[s.Value(i)] = &storage.Sample{
-				Value: d.Value(i),
-			}
-		}
+	for _, rs := range records {
+		ss = append(ss, &ArrowSeries{
+			schema:  q.db.Schema,
+			records: rs,
+			//mint:    q.mint, // TODO: Pass these on via querier
+			//maxt:    q.maxt,
+		})
 	}
 
-	// printout partially reconstructed samples
-	for k, v := range samples {
-		fmt.Printf("%v: %v\n", k, v.Value)
+	return &SliceSeriesSet{
+		series: ss,
+		i:      -1,
 	}
-
-	return nil
 }
 
 // traceIDFromMatchers finds the set of trace IDs that satisfy the label matchers
 func (q *querier) traceIDFromMatchers(ms ...*labels.Matcher) *sroar.Bitmap {
 	return nil
+}
+
+type ArrowSeries struct {
+	schema  *arrow.Schema
+	records []array.Record
+}
+
+func (as *ArrowSeries) Labels() labels.Labels {
+	// TODO: Return actual lset
+	return labels.Labels{}
+}
+
+func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
+	table := array.NewTableFromRecords(as.schema, as.records) // TODO: Release it somewhere
+	reader := array.NewTableReader(table, -1)                 // TODO: Release it somewhere
+	return &ArrowSeriesIterator{
+		err:    nil,
+		table:  table,
+		reader: reader,
+	}
+}
+
+type ArrowSeriesIterator struct {
+	err error
+
+	table  array.Table
+	reader *array.TableReader
+}
+
+func (it ArrowSeriesIterator) Err() error {
+	return it.err
+}
+
+func (it ArrowSeriesIterator) Next() bool {
+	if !it.reader.Next() {
+		return false
+	}
+
+	r := it.reader.Record()
+
+	s := array.NewStringData(r.Column(0).Data())
+	d := array.NewInt64Data(r.Column(1).Data())
+
+	//samples := map[string]*Sample{}
+	//for tr.Next() {
+	//	rec := tr.Record()
+	//
+	//	s := array.NewStringData(rec.Column(0).Data())
+	//	d := array.NewInt64Data(rec.Column(1).Data())
+	//	for i := 0; i < rec.Column(0).Len(); i++ {
+	//		samples[s.Value(i)] = &Sample{
+	//			Value: d.Value(i),
+	//		}
+	//	}
+	//}
+
+	return false
+}
+
+func (it ArrowSeriesIterator) At() InstantProfile {
+	//TODO implement me
+	panic("implement me")
 }

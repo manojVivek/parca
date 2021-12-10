@@ -1,13 +1,10 @@
-package arrowdb
+package storage
 
 import (
-	"errors"
-	"fmt"
 	"math"
 	"sort"
 
 	"github.com/dgraph-io/sroar"
-	"github.com/parca-dev/parca/pkg/storage"
 	"github.com/parca-dev/parca/pkg/storage/index"
 	"github.com/prometheus/prometheus/pkg/labels"
 )
@@ -72,52 +69,4 @@ func (l *LabelIndex) LabelNames(matchers ...*labels.Matcher) ([]string, error) {
 	}
 
 	return labelNamesWithMatchers(l, matchers...)
-}
-
-func labelValuesWithMatchers(r storage.IndexReader, name string, matchers ...*labels.Matcher) ([]string, error) {
-	// We're only interested in metrics which have the label <name>.
-	requireLabel, err := labels.NewMatcher(labels.MatchNotEqual, name, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to instantiate label matcher: %w", err)
-	}
-
-	bm, err := storage.PostingsForMatchers(r, append(matchers, requireLabel)...)
-	if err != nil {
-		return nil, err
-	}
-
-	dedupe := map[string]interface{}{}
-
-	it := bm.NewIterator()
-	for {
-		id := it.Next()
-		if id == 0 {
-			break
-		}
-
-		v, err := r.LabelValueFor(id, name)
-		if err != nil {
-			if errors.Is(err, storage.ErrNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		dedupe[v] = nil
-	}
-
-	values := make([]string, 0, len(dedupe))
-	for value := range dedupe {
-		values = append(values, value)
-	}
-
-	return values, nil
-}
-
-func labelNamesWithMatchers(r storage.IndexReader, matchers ...*labels.Matcher) ([]string, error) {
-	p, err := storage.PostingsForMatchers(r, matchers...)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.LabelNamesFor(p.ToArray()...)
 }

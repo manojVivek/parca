@@ -33,7 +33,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -83,16 +82,17 @@ func loadProfiles(b *testing.B, amount int) ([]*profile.Profile, error) {
 
 func BenchmarkAppends(b *testing.B) {
 	ctx := context.Background()
+	logger := log.NewNopLogger()
+	registry := prometheus.NewRegistry()
+	tracer := trace.NewNoopTracerProvider().Tracer("")
 
 	profiles, err := loadProfiles(b, b.N)
 	require.NoError(b, err)
 
-	logger := log.NewNopLogger()
-
 	l := metastore.NewBadgerMetastore(
-		log.NewNopLogger(),
-		prometheus.NewRegistry(),
-		otel.Tracer("foo"),
+		logger,
+		registry,
+		tracer,
 		metastore.NewRandomUUIDGenerator(),
 	)
 	require.NoError(b, err)
@@ -100,10 +100,10 @@ func BenchmarkAppends(b *testing.B) {
 		l.Close()
 	})
 
-	db := storage.OpenDB(prometheus.NewRegistry(), trace.NewNoopTracerProvider().Tracer(""), nil)
+	db := storage.OpenDB(registry, tracer, nil)
 
 	lset := labels.FromStrings("job", "parca", "n", strconv.Itoa(b.N))
-	app, err := db.Appender(context.Background(), lset)
+	app, err := db.Appender(ctx, lset)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -125,6 +125,43 @@ func BenchmarkAppends(b *testing.B) {
 		require.NoError(b, err)
 	}
 
+	b.StopTimer()
+}
+
+// go test -bench=BenchmarkArrowAppends --count=5 --benchtime=2500x -benchmem -memprofile ./pkg/storage/benchmark/db-appends-arrow-memory.pb.gz -cpuprofile ./pkg/storage/benchmark/db-appends-arrow-cpu.pb.gz ./pkg/storage | tee ./pkg/storage/benchmark/db-appends-arrow.txt
+
+func BenchmarkArrowAppends(b *testing.B) {
+	ctx := context.Background()
+	logger := log.NewNopLogger()
+	registry := prometheus.NewRegistry()
+	tracer := trace.NewNoopTracerProvider().Tracer("")
+
+	profiles, err := loadProfiles(b, b.N)
+	require.NoError(b, err)
+
+	metaStore := metastore.NewBadgerMetastore(
+		logger,
+		registry,
+		tracer,
+		metastore.NewRandomUUIDGenerator(),
+	)
+
+	db := storage.NewArrowDB()
+
+	lset := labels.FromStrings("job", "parca", "n", strconv.Itoa(b.N))
+	app, err := db.Appender(ctx, lset)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		p := profiles[i%len(profiles)]
+		pprof, err := storage.FlatProfileFromPprof(ctx, logger, metaStore, p, 0)
+		require.NoError(b, err)
+		err = app.AppendFlat(ctx, pprof)
+		require.NoError(b, err)
+	}
 	b.StopTimer()
 }
 
@@ -173,6 +210,67 @@ func BenchmarkIterator(b *testing.B) {
 		q = db.Querier(context.Background(), math.MinInt64, math.MaxInt64, false)
 	} else {
 		q = db.Querier(context.Background(), 1614253659535, 1614262838920, false)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	set := q.Select(nil, labels.MustNewMatcher(labels.MatchEqual, "job", "parca"))
+	seen := 0
+	for set.Next() {
+		s := set.At()
+		it := s.Iterator()
+		for it.Next() {
+			seen++
+		}
+	}
+
+	if b.N == 1 {
+		require.Equal(b, 1, seen)
+	} else {
+		require.Equal(b, 1121, seen) // 1250 - 130 and then +1 for the next value we'd see.
+	}
+}
+
+// go test -bench=BenchmarkArrowIterator --count=5 --benchtime=2500x -benchmem -memprofile ./pkg/storage/benchmark/db-iterator-arrow-memory.pb.gz -cpuprofile ./pkg/storage/benchmark/db-iterator-arrow-cpu.pb.gz ./pkg/storage | tee ./pkg/storage/benchmark/db-iterator-arrow.txt
+
+func BenchmarkArrowIterator(b *testing.B) {
+	ctx := context.Background()
+	logger := log.NewNopLogger()
+	registry := prometheus.NewRegistry()
+	tracer := trace.NewNoopTracerProvider().Tracer("")
+
+	profiles, err := loadProfiles(b, b.N)
+	require.NoError(b, err)
+
+	l := metastore.NewBadgerMetastore(logger, registry, tracer, metastore.NewRandomUUIDGenerator())
+	require.NoError(b, err)
+	b.Cleanup(func() {
+		l.Close()
+	})
+
+	db := storage.NewArrowDB()
+
+	lset := labels.FromStrings("job", "parca", "n", strconv.Itoa(b.N))
+	app, err := db.Appender(ctx, lset)
+	require.NoError(b, err)
+	for i := 0; i < b.N; i++ {
+		pprof := profiles[i%len(profiles)]
+		p, err := storage.FlatProfileFromPprof(ctx, logger, l, pprof, 0)
+		require.NoError(b, err)
+		err = app.AppendFlat(ctx, p)
+		require.NoError(b, err)
+	}
+
+	//1614253659535 - 130th sample
+	//1614255868920 - 400th sample
+	//1614262838920 - 1250th sample
+
+	var q storage.Querier
+	if b.N == 1 {
+		q = db.Querier(ctx, math.MinInt64, math.MaxInt64, false)
+	} else {
+		q = db.Querier(ctx, 1614253659535, 1614262838920, false)
 	}
 
 	b.ReportAllocs()
