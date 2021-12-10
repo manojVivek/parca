@@ -192,6 +192,7 @@ func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
 	for _, rs := range records {
 		ss = append(ss, &ArrowSeries{
 			schema:  q.db.Schema,
+			meta:    q.db.Metadata(),
 			records: rs,
 			//mint:    q.mint, // TODO: Pass these on via querier
 			//maxt:    q.maxt,
@@ -211,6 +212,7 @@ func (q *querier) traceIDFromMatchers(ms ...*labels.Matcher) *sroar.Bitmap {
 
 type ArrowSeries struct {
 	schema  *arrow.Schema
+	meta    arrow.Metadata
 	records []array.Record
 }
 
@@ -224,6 +226,7 @@ func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
 	reader := array.NewTableReader(table, -1)                 // TODO: Release it somewhere
 	return &ArrowSeriesIterator{
 		err:    nil,
+		meta:   as.meta,
 		table:  table,
 		reader: reader,
 	}
@@ -232,6 +235,7 @@ func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
 type ArrowSeriesIterator struct {
 	err error
 
+	meta   arrow.Metadata
 	table  array.Table
 	reader *array.TableReader
 }
@@ -241,32 +245,29 @@ func (it ArrowSeriesIterator) Err() error {
 }
 
 func (it ArrowSeriesIterator) Next() bool {
-	if !it.reader.Next() {
-		return false
-	}
-
-	r := it.reader.Record()
-
-	s := array.NewStringData(r.Column(0).Data())
-	d := array.NewInt64Data(r.Column(1).Data())
-
-	//samples := map[string]*Sample{}
-	//for tr.Next() {
-	//	rec := tr.Record()
-	//
-	//	s := array.NewStringData(rec.Column(0).Data())
-	//	d := array.NewInt64Data(rec.Column(1).Data())
-	//	for i := 0; i < rec.Column(0).Len(); i++ {
-	//		samples[s.Value(i)] = &Sample{
-	//			Value: d.Value(i),
-	//		}
-	//	}
-	//}
-
-	return false
+	return it.reader.Next()
 }
 
 func (it ArrowSeriesIterator) At() InstantProfile {
-	//TODO implement me
-	panic("implement me")
+	r := it.reader.Record()
+	s := array.NewStringData(r.Column(0).Data())
+	d := array.NewInt64Data(r.Column(1).Data())
+
+	samples := map[string]*Sample{}
+	for i := 0; i < r.Column(0).Len(); i++ {
+		samples[s.Value(i)] = &Sample{
+			Value: d.Value(i),
+		}
+	}
+
+	return &FlatProfile{
+		Meta: InstantProfileMeta{
+			PeriodType: ValueType{},
+			SampleType: ValueType{},
+			Timestamp:  0,
+			Duration:   0,
+			Period:     0,
+		},
+		samples: samples,
+	}
 }

@@ -47,9 +47,26 @@ func TestAppendProfile(t *testing.T) {
 	}
 
 	q := db.Querier(context.Background(), math.MinInt64, math.MaxInt64, false)
-	_ = q.Select(nil, &labels.Matcher{
+	ss := q.Select(nil, &labels.Matcher{
 		Type:  labels.MatchEqual,
 		Name:  "__name__",
 		Value: "allocs",
 	}) // select all - for now
+
+	expectedCumulative := []int64{48, 48, 48}
+
+	var i int
+	for ss.Next() {
+		s := ss.At()
+		it := s.Iterator()
+		for it.Next() {
+			p := it.At()
+			var cumulative int64
+			for _, sample := range p.Samples() {
+				cumulative += sample.Value
+			}
+			require.Equal(t, expectedCumulative[i], cumulative)
+			i++
+		}
+	}
 }
