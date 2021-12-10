@@ -22,15 +22,21 @@ func TestAppendProfile(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	tracer := trace.NewNoopTracerProvider().Tracer("")
 
-	b, err := ioutil.ReadFile("testdata/profile1.pb.gz")
+	b1, err := ioutil.ReadFile("testdata/profile1.pb.gz")
+	require.NoError(t, err)
+	b2, err := ioutil.ReadFile("testdata/profile2.pb.gz")
 	require.NoError(t, err)
 
-	p, err := profile.Parse(bytes.NewBuffer(b))
+	p1, err := profile.Parse(bytes.NewBuffer(b1))
+	require.NoError(t, err)
+	p2, err := profile.Parse(bytes.NewBuffer(b2))
 	require.NoError(t, err)
 
 	ms := metastore.NewBadgerMetastore(logger, registry, tracer, metastore.NewRandomUUIDGenerator())
 
-	fp, err := FlatProfileFromPprof(ctx, logger, ms, p, 0)
+	fp1, err := FlatProfileFromPprof(ctx, logger, ms, p1, 0)
+	require.NoError(t, err)
+	fp2, err := FlatProfileFromPprof(ctx, logger, ms, p2, 0)
 	require.NoError(t, err)
 
 	db := NewArrowDB()
@@ -41,10 +47,8 @@ func TestAppendProfile(t *testing.T) {
 		},
 	})
 
-	for i := 0; i < 3; i++ {
-		err := appender.AppendFlat(ctx, fp)
-		require.NoError(t, err)
-	}
+	require.NoError(t, appender.AppendFlat(ctx, fp1))
+	require.NoError(t, appender.AppendFlat(ctx, fp2))
 
 	q := db.Querier(context.Background(), math.MinInt64, math.MaxInt64, false)
 	ss := q.Select(nil, &labels.Matcher{
@@ -53,7 +57,8 @@ func TestAppendProfile(t *testing.T) {
 		Value: "allocs",
 	}) // select all - for now
 
-	expectedCumulative := []int64{48, 48, 48}
+	expectedTimestamps := []int64{1626013307085, 1626014267084}
+	expectedCumulative := []int64{48, 51}
 
 	var i int
 	for ss.Next() {
@@ -61,11 +66,14 @@ func TestAppendProfile(t *testing.T) {
 		it := s.Iterator()
 		for it.Next() {
 			p := it.At()
+			require.Equal(t, expectedTimestamps[i], p.ProfileMeta().Timestamp)
+
 			var cumulative int64
 			for _, sample := range p.Samples() {
 				cumulative += sample.Value
 			}
 			require.Equal(t, expectedCumulative[i], cumulative)
+
 			i++
 		}
 	}

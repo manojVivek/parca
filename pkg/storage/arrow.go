@@ -17,21 +17,21 @@ import (
 const (
 	//tenantCol = iota
 	//labelSetIDCol
-	stackTraceIDCol = iota
-	//timeStampCol
-	valueCol
+	colStacktraceID = iota
+	colTimestamp
+	colValue
 )
 
 const (
-	timestampMeta = "ts"
-	labelsetMeta  = "ls"
+	//timestampMeta = "ts"
+	labelsetMeta = "ls"
 )
 
 var schemaFields = []arrow.Field{
 	//{Name: "tenant", Type: arrow.BinaryTypes.String},
 	//{Name: "labelsetID", Type: arrow.PrimitiveTypes.Uint64},
 	{Name: "stackTraceID", Type: arrow.BinaryTypes.String},
-	//{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
+	{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
 	{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 }
 
@@ -102,12 +102,12 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 
 	// Create a record builder for the profile
 	md := arrow.MetadataFrom(map[string]string{
-		"PeriodType":  fmt.Sprintf("%v", p.Meta.PeriodType),
-		"SampleType":  fmt.Sprintf("%v", p.Meta.SampleType),
-		timestampMeta: fmt.Sprintf("%v", p.Meta.Timestamp),
-		"Duration":    fmt.Sprintf("%v", p.Meta.Duration),
-		"Period":      fmt.Sprintf("%v", p.Meta.Period),
-		labelsetMeta:  fmt.Sprintf("%v", a.lsetID),
+		"PeriodType": fmt.Sprintf("%v", p.Meta.PeriodType),
+		"SampleType": fmt.Sprintf("%v", p.Meta.SampleType),
+		//timestampMeta: fmt.Sprintf("%v", p.Meta.Timestamp),
+		"Duration":   fmt.Sprintf("%v", p.Meta.Duration),
+		"Period":     fmt.Sprintf("%v", p.Meta.Period),
+		labelsetMeta: fmt.Sprintf("%v", a.lsetID),
 	})
 	b := array.NewRecordBuilder(a.db, arrow.NewSchema(schemaFields, &md))
 	defer b.Release()
@@ -116,9 +116,9 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 	for id, s := range p.Samples() {
 		//b.Field(tenantCol).(*array.StringBuilder).Append(tenant)
 		//b.Field(labelSetIDCol).(*array.Uint64Builder).Append(a.lsetID)
-		b.Field(stackTraceIDCol).(*array.StringBuilder).Append(id)
-		//b.Field(timeStampCol).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
-		b.Field(valueCol).(*array.Int64Builder).Append(s.Value)
+		b.Field(colStacktraceID).(*array.StringBuilder).Append(id)
+		b.Field(colTimestamp).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
+		b.Field(colValue).(*array.Int64Builder).Append(s.Value)
 	}
 
 	// Create and store the record
@@ -129,14 +129,13 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 }
 
 func (db *ArrowDB) Querier(ctx context.Context, mint, maxt int64, _ bool) Querier {
-	mints, maxts := fmt.Sprintf("%v", mint), fmt.Sprintf("%v", maxt)
 	min := sort.Search(len(db.recordList), func(i int) bool {
-		ts := db.recordList[i].Schema().Metadata().Values()[db.recordList[i].Schema().Metadata().FindKey(timestampMeta)]
-		return ts >= mints
+		ts := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data()).Value(0)
+		return ts >= mint
 	})
 	max := sort.Search(len(db.recordList), func(i int) bool {
-		ts := db.recordList[i].Schema().Metadata().Values()[db.recordList[i].Schema().Metadata().FindKey(timestampMeta)]
-		return ts >= maxts
+		ts := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data()).Value(0)
+		return ts >= maxt
 	})
 
 	return &querier{
@@ -250,11 +249,12 @@ func (it ArrowSeriesIterator) Next() bool {
 
 func (it ArrowSeriesIterator) At() InstantProfile {
 	r := it.reader.Record()
-	s := array.NewStringData(r.Column(0).Data())
-	d := array.NewInt64Data(r.Column(1).Data())
+	s := array.NewStringData(r.Column(colStacktraceID).Data())
+	t := array.NewInt64Data(r.Column(colTimestamp).Data())
+	d := array.NewInt64Data(r.Column(colValue).Data())
 
 	samples := map[string]*Sample{}
-	for i := 0; i < r.Column(0).Len(); i++ {
+	for i := 0; i < r.Column(colStacktraceID).Len(); i++ {
 		samples[s.Value(i)] = &Sample{
 			Value: d.Value(i),
 		}
@@ -264,7 +264,7 @@ func (it ArrowSeriesIterator) At() InstantProfile {
 		Meta: InstantProfileMeta{
 			PeriodType: ValueType{},
 			SampleType: ValueType{},
-			Timestamp:  0,
+			Timestamp:  t.Value(0), // TODO: We store this len(samples) time but only ever want [0]
 			Duration:   0,
 			Period:     0,
 		},
