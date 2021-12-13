@@ -130,12 +130,18 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 
 func (db *ArrowDB) Querier(ctx context.Context, mint, maxt int64, _ bool) Querier {
 	min := sort.Search(len(db.recordList), func(i int) bool {
-		ts := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data()).Value(0)
-		return ts >= mint
+		data := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data())
+		if data.Len() > 0 {
+			return data.Value(0) >= mint
+		}
+		return false
 	})
 	max := sort.Search(len(db.recordList), func(i int) bool {
-		ts := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data()).Value(0)
-		return ts >= maxt
+		data := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data())
+		if data.Len() > 0 {
+			return data.Value(0) >= maxt
+		}
+		return false
 	})
 
 	return &querier{
@@ -154,13 +160,23 @@ type querier struct {
 }
 
 func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, Warnings, error) {
-	//TODO implement me
-	panic("implement me")
+	//_, span := q.head.tracer.Start(q.ctx, "LabelValues")
+	//defer span.End()
+
+	// TODO: Eventually use the headIndexReader concept which can read indexes only from certain time ranges.
+	ir := q.db.idx
+	values, err := ir.LabelValues(name, ms...)
+	return values, nil, err
 }
 
 func (q *querier) LabelNames(ms ...*labels.Matcher) ([]string, Warnings, error) {
-	//TODO implement me
-	panic("implement me")
+	//_, span := q.head.tracer.Start(q.ctx, "LabelNames")
+	//defer span.End()
+
+	// TODO: Eventually use the headIndexReader concept which can read indexes only from certain time ranges.
+	ir := q.db.idx
+	names, err := ir.LabelNames(ms...)
+	return names, nil, err
 }
 
 // Select will obtain a set of postings from the label index based on the given label matchers.
