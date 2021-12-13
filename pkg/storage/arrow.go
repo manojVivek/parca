@@ -147,16 +147,19 @@ func (db *ArrowDB) Querier(ctx context.Context, mint, maxt int64, _ bool) Querie
 	return &querier{
 		ctx:    ctx,
 		db:     db,
+		mint:   mint,
+		maxt:   maxt,
 		minIdx: min,
 		maxIdx: max,
 	}
 }
 
 type querier struct {
-	ctx    context.Context
-	db     *ArrowDB
-	minIdx int
-	maxIdx int
+	ctx context.Context
+	db  *ArrowDB
+
+	mint, maxt     int64
+	minIdx, maxIdx int
 }
 
 func (q *querier) LabelValues(name string, ms ...*labels.Matcher) ([]string, Warnings, error) {
@@ -210,8 +213,8 @@ func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
 			meta:       q.db.Metadata(),
 			records:    rs,
 			labelSetID: id,
-			//mint:    q.mint, // TODO: Pass these on via querier
-			//maxt:    q.maxt,
+			mint:       q.mint,
+			maxt:       q.maxt,
 		})
 	}
 
@@ -231,6 +234,8 @@ type ArrowSeries struct {
 	meta       arrow.Metadata
 	records    []array.Record
 	labelSetID uint64
+
+	mint, maxt int64
 }
 
 func (as *ArrowSeries) Labels() labels.Labels {
