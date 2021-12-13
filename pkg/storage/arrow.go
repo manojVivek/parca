@@ -174,7 +174,7 @@ func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
 	records := make(map[uint64][]array.Record, postings.GetCardinality())
 
 	// TODO: This might not be the best runtime.
-	// Maybe arrow has another way to find records by labelset?
+	// Maybe arrow has another way to find records by labelSetID?
 	for _, r := range q.db.recordList[q.minIdx:q.maxIdx] {
 		s := r.Schema().Metadata().Values()[r.Schema().Metadata().FindKey(labelsetMeta)]
 		v, err := strconv.ParseUint(s, 10, 64)
@@ -188,11 +188,12 @@ func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
 
 	ss := make([]Series, 0, postings.GetCardinality())
 
-	for _, rs := range records {
+	for id, rs := range records {
 		ss = append(ss, &ArrowSeries{
-			schema:  q.db.Schema,
-			meta:    q.db.Metadata(),
-			records: rs,
+			schema:     q.db.Schema,
+			meta:       q.db.Metadata(),
+			records:    rs,
+			labelSetID: id,
 			//mint:    q.mint, // TODO: Pass these on via querier
 			//maxt:    q.maxt,
 		})
@@ -210,14 +211,17 @@ func (q *querier) traceIDFromMatchers(ms ...*labels.Matcher) *sroar.Bitmap {
 }
 
 type ArrowSeries struct {
-	schema  *arrow.Schema
-	meta    arrow.Metadata
-	records []array.Record
+	schema     *arrow.Schema
+	meta       arrow.Metadata
+	records    []array.Record
+	labelSetID uint64
 }
 
 func (as *ArrowSeries) Labels() labels.Labels {
-	// TODO: Return actual lset
-	return labels.Labels{}
+	return labels.Labels{{
+		Name:  "id",
+		Value: strconv.FormatUint(as.labelSetID, 10),
+	}}
 }
 
 func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
