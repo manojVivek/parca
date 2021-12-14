@@ -67,7 +67,7 @@ func loadProfiles(b *testing.B, amount int) ([]*profile.Profile, error) {
 		}
 		p, err := profile.Parse(f)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", f.Name(), err)
 		}
 
 		p.SampleType = []*profile.ValueType{p.SampleType[0]}

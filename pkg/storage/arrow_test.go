@@ -16,7 +16,7 @@ import (
 	"golang.org/x/net/context"
 )
 
-func TestAppendProfile(t *testing.T) {
+func Test_Arrow_AppendProfile(t *testing.T) {
 	ctx := context.Background()
 	logger := log.NewNopLogger()
 	registry := prometheus.NewRegistry()
@@ -79,7 +79,7 @@ func TestAppendProfile(t *testing.T) {
 	}
 }
 
-func TestArrowMultipleSeries(t *testing.T) {
+func Test_Arrow_MultipleSeries(t *testing.T) {
 	ctx := context.Background()
 	logger := log.NewNopLogger()
 	registry := prometheus.NewRegistry()
