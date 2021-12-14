@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 
@@ -193,6 +194,7 @@ func (q *querier) Select(hints *SelectHints, ms ...*labels.Matcher) SeriesSet {
 	records := make(map[uint64][]array.Record, postings.GetCardinality())
 
 	// TODO: This might not be the best runtime.
+	// TODO: we'll want some sort of reverse index to lookup index by labelset id
 	// Maybe arrow has another way to find records by labelSetID?
 	for _, r := range q.db.recordList[q.minIdx:q.maxIdx] {
 		s := r.Schema().Metadata().Values()[r.Schema().Metadata().FindKey(labelsetMeta)]
@@ -246,14 +248,22 @@ func (as *ArrowSeries) Labels() labels.Labels {
 }
 
 func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
-	table := array.NewTableFromRecords(as.schema, as.records) // TODO: Release it somewhere
-	reader := array.NewTableReader(table, -1)                 // TODO: Release it somewhere
-	return &ArrowSeriesIterator{
+	table := array.NewTableFromRecords(as.schema, as.records)
+	reader := array.NewTableReader(table, -1)
+	a := &ArrowSeriesIterator{
 		err:    nil,
 		meta:   as.meta,
 		table:  table,
 		reader: reader,
 	}
+
+	// TODO: we'll want to change the ProfileSeriesIterator to support a Close() function instead of using the finalizer
+	runtime.SetFinalizer(a, func(a *ArrowSeriesIterator) {
+		a.reader.Release()
+		a.table.Release()
+	})
+
+	return a
 }
 
 type ArrowSeriesIterator struct {
