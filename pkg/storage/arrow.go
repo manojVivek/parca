@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"strconv"
 
@@ -19,20 +18,24 @@ const (
 	//tenantCol = iota
 	//labelSetIDCol
 	colStacktraceID = iota
-	colTimestamp
+	//colTimestamp
 	colValue
 )
 
 const (
-	//timestampMeta = "ts"
-	labelsetMeta = "ls"
+	timestampMeta  = "ts"
+	labelsetMeta   = "ls"
+	periodMeta     = "p"
+	durationMeta   = "d"
+	periodTypeMeta = "pt"
+	sampleTypeMeta = "st"
 )
 
 var schemaFields = []arrow.Field{
 	//{Name: "tenant", Type: arrow.BinaryTypes.String},
 	//{Name: "labelsetID", Type: arrow.PrimitiveTypes.Uint64},
 	{Name: "stackTraceID", Type: arrow.BinaryTypes.String},
-	{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
+	//{Name: "timestamp", Type: arrow.FixedWidthTypes.Time64us},
 	{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 }
 
@@ -103,12 +106,12 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 
 	// Create a record builder for the profile
 	md := arrow.MetadataFrom(map[string]string{
-		"PeriodType": fmt.Sprintf("%v", p.Meta.PeriodType),
-		"SampleType": fmt.Sprintf("%v", p.Meta.SampleType),
-		//timestampMeta: fmt.Sprintf("%v", p.Meta.Timestamp),
-		"Duration":   fmt.Sprintf("%v", p.Meta.Duration),
-		"Period":     fmt.Sprintf("%v", p.Meta.Period),
-		labelsetMeta: fmt.Sprintf("%v", a.lsetID),
+		periodTypeMeta: p.Meta.PeriodType.String(),
+		sampleTypeMeta: p.Meta.SampleType.String(),
+		timestampMeta:  fmt.Sprintf("%v", p.Meta.Timestamp),
+		durationMeta:   fmt.Sprintf("%v", p.Meta.Duration),
+		periodMeta:     fmt.Sprintf("%v", p.Meta.Period),
+		labelsetMeta:   fmt.Sprintf("%v", a.lsetID),
 	})
 	b := array.NewRecordBuilder(a.db, arrow.NewSchema(schemaFields, &md))
 	defer b.Release()
@@ -118,7 +121,7 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 		//b.Field(tenantCol).(*array.StringBuilder).Append(tenant)
 		//b.Field(labelSetIDCol).(*array.Uint64Builder).Append(a.lsetID)
 		b.Field(colStacktraceID).(*array.StringBuilder).Append(id)
-		b.Field(colTimestamp).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
+		//b.Field(colTimestamp).(*array.Time64Builder).Append(arrow.Time64(p.Meta.Timestamp))
 		b.Field(colValue).(*array.Int64Builder).Append(s.Value)
 	}
 
@@ -131,18 +134,24 @@ func (a *appender) AppendFlat(ctx context.Context, p *FlatProfile) error {
 
 func (db *ArrowDB) Querier(ctx context.Context, mint, maxt int64, _ bool) Querier {
 	min := sort.Search(len(db.recordList), func(i int) bool {
-		data := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data())
-		if data.Len() > 0 {
-			return data.Value(0) >= mint
+		meta := db.recordList[i].Schema().Metadata()
+		ts := meta.Values()[meta.FindKey(timestampMeta)]
+		timestamp, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			panic("at the disco")
 		}
-		return false
+
+		return timestamp >= mint
 	})
 	max := sort.Search(len(db.recordList), func(i int) bool {
-		data := array.NewInt64Data(db.recordList[i].Column(colTimestamp).Data())
-		if data.Len() > 0 {
-			return data.Value(0) >= maxt
+		meta := db.recordList[i].Schema().Metadata()
+		ts := meta.Values()[meta.FindKey(timestampMeta)]
+		timestamp, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			panic("at the disco")
 		}
-		return false
+
+		return timestamp >= maxt
 	})
 
 	return &querier{
@@ -248,20 +257,11 @@ func (as *ArrowSeries) Labels() labels.Labels {
 }
 
 func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
-	table := array.NewTableFromRecords(as.schema, as.records)
-	reader := array.NewTableReader(table, -1)
 	a := &ArrowSeriesIterator{
-		err:    nil,
-		meta:   as.meta,
-		table:  table,
-		reader: reader,
+		err:     nil,
+		meta:    as.meta,
+		records: as.records,
 	}
-
-	// TODO: we'll want to change the ProfileSeriesIterator to support a Close() function instead of using the finalizer
-	runtime.SetFinalizer(a, func(a *ArrowSeriesIterator) {
-		a.reader.Release()
-		a.table.Release()
-	})
 
 	return a
 }
@@ -269,23 +269,25 @@ func (as *ArrowSeries) Iterator() ProfileSeriesIterator {
 type ArrowSeriesIterator struct {
 	err error
 
-	meta   arrow.Metadata
-	table  array.Table
-	reader *array.TableReader
+	meta    arrow.Metadata
+	table   array.Table
+	records []array.Record
+	idx     int
 }
 
-func (it ArrowSeriesIterator) Err() error {
+func (it *ArrowSeriesIterator) Err() error {
 	return it.err
 }
 
-func (it ArrowSeriesIterator) Next() bool {
-	return it.reader.Next()
+func (it *ArrowSeriesIterator) Next() bool {
+	it.idx++
+	return it.idx <= len(it.records)
 }
 
-func (it ArrowSeriesIterator) At() InstantProfile {
-	r := it.reader.Record()
+func (it *ArrowSeriesIterator) At() InstantProfile {
+	r := it.records[it.idx-1]
 	s := array.NewStringData(r.Column(colStacktraceID).Data())
-	t := array.NewInt64Data(r.Column(colTimestamp).Data())
+	//t := array.NewInt64Data(r.Column(colTimestamp).Data())
 	d := array.NewInt64Data(r.Column(colValue).Data())
 
 	samples := map[string]*Sample{}
@@ -295,13 +297,32 @@ func (it ArrowSeriesIterator) At() InstantProfile {
 		}
 	}
 
+	meta := r.Schema().Metadata()
+	p := meta.Values()[meta.FindKey(periodMeta)]
+	period, err := strconv.ParseInt(p, 10, 64)
+	if err != nil {
+		panic("oh noes")
+	}
+	pt := meta.Values()[meta.FindKey(periodTypeMeta)]
+	dur := meta.Values()[meta.FindKey(durationMeta)]
+	duration, err := strconv.ParseInt(dur, 10, 64)
+	if err != nil {
+		panic("oh noes")
+	}
+	st := meta.Values()[meta.FindKey(sampleTypeMeta)]
+	ts := meta.Values()[meta.FindKey(timestampMeta)]
+	timestamp, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		panic("oh noes")
+	}
+
 	return &FlatProfile{
 		Meta: InstantProfileMeta{
-			PeriodType: ValueType{},
-			SampleType: ValueType{},
-			Timestamp:  t.Value(0), // TODO: We store this len(samples) time but only ever want [0]
-			Duration:   0,
-			Period:     0,
+			PeriodType: ValueTypeFromString(pt),
+			SampleType: ValueTypeFromString(st),
+			Timestamp:  timestamp,
+			Duration:   duration,
+			Period:     period,
 		},
 		samples: samples,
 	}

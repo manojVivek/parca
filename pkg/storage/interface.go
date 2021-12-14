@@ -15,6 +15,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/go-kit/log"
@@ -45,6 +46,18 @@ type InstantProfileTree interface {
 type ValueType struct {
 	Type string
 	Unit string
+}
+
+func (v ValueType) String() string {
+	return v.Type + ":" + v.Unit
+}
+
+func ValueTypeFromString(s string) ValueType {
+	parts := strings.Split(s, ":")
+	return ValueType{
+		Type: parts[0],
+		Unit: parts[1],
+	}
 }
 
 type InstantProfileMeta struct {

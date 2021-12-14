@@ -66,6 +66,21 @@ func Test_Arrow_AppendProfile(t *testing.T) {
 		it := s.Iterator()
 		for it.Next() {
 			p := it.At()
+			require.Equal(t, ValueType{
+				Type: "cpu",
+				Unit: "nanoseconds",
+			}, p.ProfileMeta().PeriodType)
+			require.Equal(t, ValueType{
+				Type: "samples",
+				Unit: "count",
+			}, p.ProfileMeta().SampleType)
+			require.Equal(t, int64(10000000), p.ProfileMeta().Period)
+			switch i {
+			case 0:
+				require.Equal(t, int64(30000181568), p.ProfileMeta().Duration)
+			case 1:
+				require.Equal(t, int64(30000203971), p.ProfileMeta().Duration)
+			}
 			require.Equal(t, expectedTimestamps[i], p.ProfileMeta().Timestamp)
 
 			var cumulative int64
